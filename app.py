@@ -17,6 +17,21 @@ from sklearn.preprocessing import StandardScaler
 
 matplotlib.rcParams["axes.unicode_minus"] = False
 
+# Korean font setup
+import matplotlib.font_manager as fm
+import platform
+
+if platform.system() == "Linux":
+    # Streamlit Cloud (Linux) - use NanumGothic installed via packages.txt
+    font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        matplotlib.rcParams["font.family"] = "NanumGothic"
+elif platform.system() == "Windows":
+    matplotlib.rcParams["font.family"] = "Malgun Gothic"
+elif platform.system() == "Darwin":
+    matplotlib.rcParams["font.family"] = "AppleGothic"
+
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = SRC_DIR
 sys.path.insert(0, SRC_DIR)

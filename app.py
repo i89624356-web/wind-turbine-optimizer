@@ -348,7 +348,7 @@ def main():
         with col_b:
             st.markdown("#### 3D Blade Shape (drag to rotate)")
             fig_3d = plot_blade_3d(radius, thickness, camber, twist_root)
-            st.plotly_chart(fig_3d, use_container_width=True)
+            st.plotly_chart(fig_3d, use_container_width=True, key="blade3d_tab0")
 
         st.markdown("#### Air Flow Around Airfoil")
         aoa = st.slider("Angle of Attack (deg)", min_value=-5.0, max_value=20.0, value=5.0, step=1.0)
@@ -517,11 +517,11 @@ def main():
         with col_3d_1:
             st.markdown("##### Your Design")
             fig_3d_user = plot_blade_3d(radius, thickness, camber, twist_root)
-            st.plotly_chart(fig_3d_user, use_container_width=True)
+            st.plotly_chart(fig_3d_user, use_container_width=True, key="blade3d_user")
         with col_3d_2:
             st.markdown("##### Optimal Design")
             fig_3d_opt = plot_blade_3d(opt_radius, opt_thickness, opt_camber, opt_twist)
-            st.plotly_chart(fig_3d_opt, use_container_width=True)
+            st.plotly_chart(fig_3d_opt, use_container_width=True, key="blade3d_opt")
 
         st.markdown("#### Optimal Shape by Wind Speed")
         idx = df.groupby("wind_speed_ms")["cp"].idxmax()

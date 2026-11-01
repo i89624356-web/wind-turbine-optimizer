@@ -471,6 +471,58 @@ def main():
         else:
             st.error(f"Your design Cp is {cp_diff:+.4f} compared to sweep optimal")
 
+        # --- Airfoil comparison ---
+        st.markdown("#### Airfoil Shape Comparison")
+        opt_camber = best_row["camber"]
+        opt_thickness = best_row["thickness"]
+        opt_camber_pos = 0.4
+        m_user = camber
+        p_user = 0.4 if camber > 0 else 0
+        m_opt = opt_camber
+        p_opt = opt_camber_pos if opt_camber > 0 else 0
+
+        xu_u, yu_u, xl_u, yl_u = naca4_coords(m_user, p_user, thickness)
+        xu_o, yu_o, xl_o, yl_o = naca4_coords(m_opt, p_opt, opt_thickness)
+
+        fig_cmp, ax_cmp = plt.subplots(figsize=(10, 4))
+        ax_cmp.fill(np.concatenate([xu_u, xl_u[::-1]]),
+                    np.concatenate([yu_u, yl_u[::-1]]),
+                    color="steelblue", alpha=0.25, label="Your Design")
+        ax_cmp.plot(xu_u, yu_u, "-", color="steelblue", linewidth=2)
+        ax_cmp.plot(xl_u, yl_u, "-", color="steelblue", linewidth=2)
+
+        ax_cmp.fill(np.concatenate([xu_o, xl_o[::-1]]),
+                    np.concatenate([yu_o, yl_o[::-1]]),
+                    color="crimson", alpha=0.25, label="Optimal Design")
+        ax_cmp.plot(xu_o, yu_o, "--", color="crimson", linewidth=2)
+        ax_cmp.plot(xl_o, yl_o, "--", color="crimson", linewidth=2)
+
+        ax_cmp.set_xlim(-0.05, 1.05)
+        ax_cmp.set_ylim(-0.3, 0.3)
+        ax_cmp.set_aspect("equal")
+        ax_cmp.set_xlabel("x/c", fontsize=12)
+        ax_cmp.set_ylabel("y/c", fontsize=12)
+        ax_cmp.set_title("Airfoil: Your Design vs Optimal", fontsize=14, fontweight="bold")
+        ax_cmp.legend(fontsize=11)
+        ax_cmp.grid(True, alpha=0.3)
+        st.pyplot(fig_cmp)
+        plt.close()
+
+        # --- 3D blade comparison ---
+        st.markdown("#### 3D Blade Comparison (drag to rotate)")
+        opt_radius = best_row["radius_m"]
+        opt_twist = best_row["twist_root_deg"]
+
+        col_3d_1, col_3d_2 = st.columns(2)
+        with col_3d_1:
+            st.markdown("##### Your Design")
+            fig_3d_user = plot_blade_3d(radius, thickness, camber, twist_root)
+            st.plotly_chart(fig_3d_user, use_container_width=True)
+        with col_3d_2:
+            st.markdown("##### Optimal Design")
+            fig_3d_opt = plot_blade_3d(opt_radius, opt_thickness, opt_camber, opt_twist)
+            st.plotly_chart(fig_3d_opt, use_container_width=True)
+
         st.markdown("#### Optimal Shape by Wind Speed")
         idx = df.groupby("wind_speed_ms")["cp"].idxmax()
         optimal_df = df.loc[idx].reset_index(drop=True)

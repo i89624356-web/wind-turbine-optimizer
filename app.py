@@ -48,6 +48,182 @@ def predict_cp(model, scaler, wind_speed, radius, thickness, camber, twist_root)
     return float(model.predict(X_s)[0])
 
 
+def naca4_coords(max_camber, camber_pos, thickness, n_points=100):
+    """NACA 4-digit airfoil coordinates"""
+    x = (1 - np.cos(np.linspace(0, np.pi, n_points))) / 2
+
+    # Thickness distribution
+    yt = 5 * thickness * (
+        0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x**2
+        + 0.2843 * x**3 - 0.1015 * x**4
+    )
+
+    if max_camber == 0 or camber_pos == 0:
+        xu, yu = x, yt
+        xl, yl = x, -yt
+    else:
+        m, p = max_camber, camber_pos
+        yc = np.where(x < p,
+                      m / p**2 * (2 * p * x - x**2),
+                      m / (1 - p)**2 * ((1 - 2 * p) + 2 * p * x - x**2))
+        dyc = np.where(x < p,
+                       2 * m / p**2 * (p - x),
+                       2 * m / (1 - p)**2 * (p - x))
+        theta = np.arctan(dyc)
+        xu = x - yt * np.sin(theta)
+        yu = yc + yt * np.cos(theta)
+        xl = x + yt * np.sin(theta)
+        yl = yc - yt * np.cos(theta)
+
+    return xu, yu, xl, yl
+
+
+def plot_airfoil_shape(camber, thickness, camber_pos=0.4):
+    """Airfoil cross-section plot"""
+    m = camber
+    p = camber_pos if camber > 0 else 0
+    xu, yu, xl, yl = naca4_coords(m, p, thickness)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.fill(np.concatenate([xu, xl[::-1]]),
+            np.concatenate([yu, yl[::-1]]),
+            color="steelblue", alpha=0.4, edgecolor="steelblue", linewidth=2)
+    ax.plot(xu, yu, "b-", linewidth=2)
+    ax.plot(xl, yl, "b-", linewidth=2)
+    ax.set_xlim(-0.05, 1.05)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x/c", fontsize=12)
+    ax.set_ylabel("y/c", fontsize=12)
+
+    naca_m = int(round(m * 100))
+    naca_p = int(round(p * 10))
+    naca_t = int(round(thickness * 100))
+    ax.set_title(f"NACA {naca_m}{naca_p}{naca_t:02d} Airfoil", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    return fig
+
+
+def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_pos=0.4):
+    """3D blade shape visualization"""
+    from mpl_toolkits.mplot3d import Axes3D
+
+    n_sections = 8
+    n_points = 60
+    r_positions = np.linspace(radius * 0.1, radius, n_sections)
+
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
+
+    m = camber
+    p = camber_pos if camber > 0 else 0
+
+    for r in r_positions:
+        frac = (r - radius * 0.1) / (radius * 0.9)
+        twist = twist_root + (twist_tip - twist_root) * frac
+        chord = (0.8 + (0.3 - 0.8) * frac) * radius / 5.0
+        twist_rad = np.radians(twist)
+
+        xu, yu, xl, yl = naca4_coords(m, p, thickness, n_points)
+
+        # Scale by chord
+        xu_s, yu_s = xu * chord, yu * chord
+        xl_s, yl_s = xl * chord, yl * chord
+
+        # Combine into closed contour
+        x_all = np.concatenate([xu_s, xl_s[::-1]])
+        y_all = np.concatenate([yu_s, yl_s[::-1]])
+
+        # Rotate by twist angle
+        x_rot = x_all * np.cos(twist_rad) - y_all * np.sin(twist_rad)
+        y_rot = x_all * np.sin(twist_rad) + y_all * np.cos(twist_rad)
+
+        z_all = np.full_like(x_rot, r)
+
+        ax.plot(x_rot, z_all, y_rot, color="steelblue", linewidth=1.5, alpha=0.8)
+
+    ax.set_xlabel("Chord direction (m)", fontsize=10)
+    ax.set_ylabel("Span / Radius (m)", fontsize=10)
+    ax.set_zlabel("", fontsize=10)
+    ax.set_title(f"Blade Shape (R={radius}m, twist={twist_root}-{twist_tip} deg)",
+                 fontsize=13, fontweight="bold")
+    ax.view_init(elev=20, azim=-60)
+    return fig
+
+
+def plot_streamlines(camber, thickness, wind_speed, camber_pos=0.4, alpha_deg=5.0):
+    """Simplified streamlines around airfoil using potential flow"""
+    m = camber
+    p = camber_pos if camber > 0 else 0
+    xu, yu, xl, yl = naca4_coords(m, p, thickness, 80)
+
+    # Grid around airfoil
+    nx, ny = 120, 80
+    x_grid = np.linspace(-0.5, 2.0, nx)
+    y_grid = np.linspace(-0.8, 0.8, ny)
+    X, Y = np.meshgrid(x_grid, y_grid)
+
+    alpha_rad = np.radians(alpha_deg)
+
+    # Uniform flow + approximation
+    U = wind_speed * np.cos(alpha_rad)
+    V = wind_speed * np.sin(alpha_rad)
+
+    # Source/sink doublet for thickness + vortex for lift
+    Vx = np.full_like(X, U)
+    Vy = np.full_like(X, V)
+
+    # Doublet at 0.25c for thickness effect
+    xd, yd = 0.25, 0.0
+    dx = X - xd
+    dy = Y - yd
+    r2 = dx**2 + dy**2 + 1e-6
+    doublet_strength = thickness * wind_speed * 0.5
+    Vx += doublet_strength * (dy**2 - dx**2) / r2**2
+    Vy += -2 * doublet_strength * dx * dy / r2**2
+
+    # Vortex for camber/lift
+    gamma = 2 * np.pi * wind_speed * (camber * 4 + np.sin(alpha_rad)) * 0.3
+    Vx += gamma * dy / (2 * np.pi * r2)
+    Vy += -gamma * dx / (2 * np.pi * r2)
+
+    # Speed magnitude
+    speed = np.sqrt(Vx**2 + Vy**2)
+
+    # Mask inside airfoil
+    from matplotlib.path import Path
+    airfoil_x = np.concatenate([xu, xl[::-1]])
+    airfoil_y = np.concatenate([yu, yl[::-1]])
+    airfoil_path = Path(np.column_stack([airfoil_x, airfoil_y]))
+    points = np.column_stack([X.ravel(), Y.ravel()])
+    mask = airfoil_path.contains_points(points).reshape(X.shape)
+    Vx[mask] = np.nan
+    Vy[mask] = np.nan
+    speed[mask] = np.nan
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Speed color map
+    cm = ax.contourf(X, Y, speed / wind_speed, levels=30, cmap="coolwarm", alpha=0.7)
+    fig.colorbar(cm, ax=ax, label="V / V_inf", shrink=0.8)
+
+    # Streamlines
+    ax.streamplot(X, Y, Vx, Vy, color="black", linewidth=0.5, density=2.0, arrowsize=0.8)
+
+    # Airfoil
+    ax.fill(airfoil_x, airfoil_y, color="gray", alpha=0.9, edgecolor="black", linewidth=2)
+
+    ax.set_xlim(-0.3, 1.5)
+    ax.set_ylim(-0.5, 0.5)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x/c", fontsize=12)
+    ax.set_ylabel("y/c", fontsize=12)
+    ax.set_title(f"Flow Visualization (V={wind_speed} m/s, AoA={alpha_deg} deg)",
+                 fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.2)
+    return fig
+
+
 def estimate_power(cp, wind_speed, radius, rho=1.225):
     """P = Cp * 0.5 * rho * A * V^3"""
     A = np.pi * radius ** 2
@@ -91,12 +267,37 @@ def main():
     user_power = estimate_power(user_cp, wind_speed, radius)
 
     # --- Tabs ---
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4 = st.tabs([
+        "Blade & Flow Visualization",
         "Performance Analysis",
         "Optimal Shape Search",
         "Variable Impact",
         "Data Explorer",
     ])
+
+    # === Tab 0: Visualization ===
+    with tab0:
+        st.subheader("Blade Shape & Air Flow")
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.markdown("#### Airfoil Cross-Section")
+            fig_af = plot_airfoil_shape(camber, thickness)
+            st.pyplot(fig_af)
+            plt.close()
+
+        with col_b:
+            st.markdown("#### 3D Blade Shape")
+            fig_3d = plot_blade_3d(radius, thickness, camber, twist_root)
+            st.pyplot(fig_3d)
+            plt.close()
+
+        st.markdown("#### Air Flow Around Airfoil")
+        aoa = st.slider("Angle of Attack (deg)", min_value=-5.0, max_value=20.0, value=5.0, step=1.0)
+        fig_flow = plot_streamlines(camber, thickness, wind_speed, alpha_deg=aoa)
+        st.pyplot(fig_flow)
+        plt.close()
 
     # === Tab 1 ===
     with tab1:

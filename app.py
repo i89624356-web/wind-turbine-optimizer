@@ -9,15 +9,18 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
-import joblib
 import os
 import sys
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.preprocessing import StandardScaler
 
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = SRC_DIR
 sys.path.insert(0, SRC_DIR)
+
+FEATURES = ["wind_speed_ms", "radius_m", "thickness", "camber", "twist_root_deg"]
 
 
 @st.cache_data
@@ -26,9 +29,15 @@ def load_sweep_data():
 
 
 @st.cache_resource
-def load_model():
-    model = joblib.load(os.path.join(OUTPUT_DIR, "best_model.pkl"))
-    scaler = joblib.load(os.path.join(OUTPUT_DIR, "scaler.pkl"))
+def train_model():
+    """CSV data -> train model on startup"""
+    df = pd.read_csv(os.path.join(OUTPUT_DIR, "sweep_results.csv"))
+    X = df[FEATURES].values
+    y = df["cp"].values
+    scaler = StandardScaler()
+    X_s = scaler.fit_transform(X)
+    model = GradientBoostingRegressor(n_estimators=200, max_depth=6, learning_rate=0.1, random_state=42)
+    model.fit(X_s, y)
     return model, scaler
 
 
@@ -54,7 +63,7 @@ def main():
     st.title("Wind Turbine Blade Shape Optimizer")
     st.markdown("**BEM-based analysis with ML prediction**")
 
-    model, scaler = load_model()
+    model, scaler = train_model()
     df = load_sweep_data()
 
     # --- Sidebar ---

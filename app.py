@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+import plotly.graph_objects as go
 import os
 import sys
 from sklearn.ensemble import GradientBoostingRegressor
@@ -105,10 +106,7 @@ def plot_airfoil_shape(camber, thickness, camber_pos=0.4):
 
 
 def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_pos=0.4):
-    """3D blade shape with filled surface"""
-    from mpl_toolkits.mplot3d import Axes3D
-    from matplotlib.colors import LightSource
-
+    """3D blade shape with interactive plotly surface"""
     n_sections = 30
     n_points = 40
     r_positions = np.linspace(radius * 0.1, radius, n_sections)
@@ -116,7 +114,6 @@ def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_p
     m = camber
     p = camber_pos if camber > 0 else 0
 
-    # Build upper and lower surface meshes
     X_upper = np.zeros((n_sections, n_points))
     Y_upper = np.zeros((n_sections, n_points))
     Z_upper = np.zeros((n_sections, n_points))
@@ -132,11 +129,9 @@ def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_p
 
         xu, yu, xl, yl = naca4_coords(m, p, thickness, n_points)
 
-        # Scale
         xu_s, yu_s = xu * chord, yu * chord
         xl_s, yl_s = xl * chord, yl * chord
 
-        # Rotate by twist
         X_upper[i] = xu_s * np.cos(twist_rad) - yu_s * np.sin(twist_rad)
         Z_upper[i] = xu_s * np.sin(twist_rad) + yu_s * np.cos(twist_rad)
         Y_upper[i] = r
@@ -145,30 +140,34 @@ def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_p
         Z_lower[i] = xl_s * np.sin(twist_rad) + yl_s * np.cos(twist_rad)
         Y_lower[i] = r
 
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection="3d")
+    fig = go.Figure()
 
-    # Plot surfaces
-    ax.plot_surface(X_upper, Y_upper, Z_upper, color="steelblue", alpha=0.8,
-                    edgecolor="none", shade=True)
-    ax.plot_surface(X_lower, Y_lower, Z_lower, color="steelblue", alpha=0.8,
-                    edgecolor="none", shade=True)
+    # Upper surface
+    fig.add_trace(go.Surface(
+        x=X_upper, y=Y_upper, z=Z_upper,
+        colorscale=[[0, "steelblue"], [1, "steelblue"]],
+        showscale=False, opacity=0.9,
+        name="Upper Surface",
+    ))
+    # Lower surface
+    fig.add_trace(go.Surface(
+        x=X_lower, y=Y_lower, z=Z_lower,
+        colorscale=[[0, "steelblue"], [1, "steelblue"]],
+        showscale=False, opacity=0.9,
+        name="Lower Surface",
+    ))
 
-    # Section outlines at key positions
+    # Section outlines
     for idx in [0, n_sections // 4, n_sections // 2, 3 * n_sections // 4, n_sections - 1]:
         x_outline = np.concatenate([X_upper[idx], X_lower[idx, ::-1]])
         y_outline = np.full_like(x_outline, Y_upper[idx, 0])
         z_outline = np.concatenate([Z_upper[idx], Z_lower[idx, ::-1]])
-        ax.plot(x_outline, y_outline, z_outline, color="navy", linewidth=1.0, alpha=0.6)
+        fig.add_trace(go.Scatter3d(
+            x=x_outline, y=y_outline, z=z_outline,
+            mode="lines", line=dict(color="navy", width=3),
+            showlegend=False,
+        ))
 
-    ax.set_xlabel("Chord (m)", fontsize=10)
-    ax.set_ylabel("Span (m)", fontsize=10)
-    ax.set_zlabel("", fontsize=10)
-    ax.set_title(f"Blade Shape (R={radius}m, twist={twist_root:.0f}~{twist_tip:.0f} deg)",
-                 fontsize=13, fontweight="bold")
-    ax.view_init(elev=25, azim=-55)
-
-    # Equal aspect ratio approximation
     max_range = max(
         X_upper.max() - X_upper.min(),
         Y_upper.max() - Y_upper.min(),
@@ -176,9 +175,23 @@ def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_p
     ) / 2
     mid_x = (X_upper.max() + X_upper.min()) / 2
     mid_y = (Y_upper.max() + Y_upper.min()) / 2
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(-max_range * 0.3, max_range * 0.3)
+
+    fig.update_layout(
+        title=dict(text=f"Blade Shape (R={radius}m, twist={twist_root:.0f}~{twist_tip:.0f} deg)"),
+        scene=dict(
+            xaxis_title="Chord (m)",
+            yaxis_title="Span (m)",
+            zaxis_title="",
+            xaxis=dict(range=[mid_x - max_range, mid_x + max_range]),
+            yaxis=dict(range=[mid_y - max_range, mid_y + max_range]),
+            zaxis=dict(range=[-max_range * 0.3, max_range * 0.3]),
+            aspectmode="manual",
+            aspectratio=dict(x=1, y=2, z=0.3),
+            camera=dict(eye=dict(x=1.5, y=-1.0, z=0.6)),
+        ),
+        height=500,
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
 
     return fig
 
@@ -245,8 +258,10 @@ def plot_streamlines(camber, thickness, wind_speed, camber_pos=0.4, alpha_deg=5.
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Speed color map (use unmasked speed so no white region)
-    cm = ax.contourf(X, Y, speed_filled / wind_speed, levels=30, cmap="coolwarm", alpha=0.85)
+    # Speed color map with tight range to show velocity variation near airfoil
+    levels = np.linspace(0.5, 1.8, 40)
+    cm = ax.contourf(X, Y, speed_filled / wind_speed, levels=levels, cmap="coolwarm",
+                     alpha=0.85, extend="both")
     fig.colorbar(cm, ax=ax, label="V / V_inf", shrink=0.8)
 
     # Streamlines
@@ -331,10 +346,9 @@ def main():
             plt.close()
 
         with col_b:
-            st.markdown("#### 3D Blade Shape")
+            st.markdown("#### 3D Blade Shape (drag to rotate)")
             fig_3d = plot_blade_3d(radius, thickness, camber, twist_root)
-            st.pyplot(fig_3d)
-            plt.close()
+            st.plotly_chart(fig_3d, use_container_width=True)
 
         st.markdown("#### Air Flow Around Airfoil")
         aoa = st.slider("Angle of Attack (deg)", min_value=-5.0, max_value=20.0, value=5.0, step=1.0)

@@ -105,20 +105,26 @@ def plot_airfoil_shape(camber, thickness, camber_pos=0.4):
 
 
 def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_pos=0.4):
-    """3D blade shape visualization"""
+    """3D blade shape with filled surface"""
     from mpl_toolkits.mplot3d import Axes3D
+    from matplotlib.colors import LightSource
 
-    n_sections = 8
-    n_points = 60
+    n_sections = 30
+    n_points = 40
     r_positions = np.linspace(radius * 0.1, radius, n_sections)
-
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection="3d")
 
     m = camber
     p = camber_pos if camber > 0 else 0
 
-    for r in r_positions:
+    # Build upper and lower surface meshes
+    X_upper = np.zeros((n_sections, n_points))
+    Y_upper = np.zeros((n_sections, n_points))
+    Z_upper = np.zeros((n_sections, n_points))
+    X_lower = np.zeros((n_sections, n_points))
+    Y_lower = np.zeros((n_sections, n_points))
+    Z_lower = np.zeros((n_sections, n_points))
+
+    for i, r in enumerate(r_positions):
         frac = (r - radius * 0.1) / (radius * 0.9)
         twist = twist_root + (twist_tip - twist_root) * frac
         chord = (0.8 + (0.3 - 0.8) * frac) * radius / 5.0
@@ -126,28 +132,54 @@ def plot_blade_3d(radius, thickness, camber, twist_root, twist_tip=2.0, camber_p
 
         xu, yu, xl, yl = naca4_coords(m, p, thickness, n_points)
 
-        # Scale by chord
+        # Scale
         xu_s, yu_s = xu * chord, yu * chord
         xl_s, yl_s = xl * chord, yl * chord
 
-        # Combine into closed contour
-        x_all = np.concatenate([xu_s, xl_s[::-1]])
-        y_all = np.concatenate([yu_s, yl_s[::-1]])
+        # Rotate by twist
+        X_upper[i] = xu_s * np.cos(twist_rad) - yu_s * np.sin(twist_rad)
+        Z_upper[i] = xu_s * np.sin(twist_rad) + yu_s * np.cos(twist_rad)
+        Y_upper[i] = r
 
-        # Rotate by twist angle
-        x_rot = x_all * np.cos(twist_rad) - y_all * np.sin(twist_rad)
-        y_rot = x_all * np.sin(twist_rad) + y_all * np.cos(twist_rad)
+        X_lower[i] = xl_s * np.cos(twist_rad) - yl_s * np.sin(twist_rad)
+        Z_lower[i] = xl_s * np.sin(twist_rad) + yl_s * np.cos(twist_rad)
+        Y_lower[i] = r
 
-        z_all = np.full_like(x_rot, r)
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
 
-        ax.plot(x_rot, z_all, y_rot, color="steelblue", linewidth=1.5, alpha=0.8)
+    # Plot surfaces
+    ax.plot_surface(X_upper, Y_upper, Z_upper, color="steelblue", alpha=0.8,
+                    edgecolor="none", shade=True)
+    ax.plot_surface(X_lower, Y_lower, Z_lower, color="steelblue", alpha=0.8,
+                    edgecolor="none", shade=True)
 
-    ax.set_xlabel("Chord direction (m)", fontsize=10)
-    ax.set_ylabel("Span / Radius (m)", fontsize=10)
+    # Section outlines at key positions
+    for idx in [0, n_sections // 4, n_sections // 2, 3 * n_sections // 4, n_sections - 1]:
+        x_outline = np.concatenate([X_upper[idx], X_lower[idx, ::-1]])
+        y_outline = np.full_like(x_outline, Y_upper[idx, 0])
+        z_outline = np.concatenate([Z_upper[idx], Z_lower[idx, ::-1]])
+        ax.plot(x_outline, y_outline, z_outline, color="navy", linewidth=1.0, alpha=0.6)
+
+    ax.set_xlabel("Chord (m)", fontsize=10)
+    ax.set_ylabel("Span (m)", fontsize=10)
     ax.set_zlabel("", fontsize=10)
-    ax.set_title(f"Blade Shape (R={radius}m, twist={twist_root}-{twist_tip} deg)",
+    ax.set_title(f"Blade Shape (R={radius}m, twist={twist_root:.0f}~{twist_tip:.0f} deg)",
                  fontsize=13, fontweight="bold")
-    ax.view_init(elev=20, azim=-60)
+    ax.view_init(elev=25, azim=-55)
+
+    # Equal aspect ratio approximation
+    max_range = max(
+        X_upper.max() - X_upper.min(),
+        Y_upper.max() - Y_upper.min(),
+        max(Z_upper.max(), -Z_lower.min()) * 2
+    ) / 2
+    mid_x = (X_upper.max() + X_upper.min()) / 2
+    mid_y = (Y_upper.max() + Y_upper.min()) / 2
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(-max_range * 0.3, max_range * 0.3)
+
     return fig
 
 
@@ -190,28 +222,39 @@ def plot_streamlines(camber, thickness, wind_speed, camber_pos=0.4, alpha_deg=5.
     # Speed magnitude
     speed = np.sqrt(Vx**2 + Vy**2)
 
-    # Mask inside airfoil
+    # Airfoil boundary
     from matplotlib.path import Path
     airfoil_x = np.concatenate([xu, xl[::-1]])
     airfoil_y = np.concatenate([yu, yl[::-1]])
     airfoil_path = Path(np.column_stack([airfoil_x, airfoil_y]))
     points = np.column_stack([X.ravel(), Y.ravel()])
     mask = airfoil_path.contains_points(points).reshape(X.shape)
-    Vx[mask] = np.nan
-    Vy[mask] = np.nan
-    speed[mask] = np.nan
+
+    # Expand mask slightly to remove white fringe
+    from scipy.ndimage import binary_dilation
+    mask_expanded = binary_dilation(mask, iterations=2)
+
+    # For streamlines: mask inside airfoil
+    Vx_stream = Vx.copy()
+    Vy_stream = Vy.copy()
+    Vx_stream[mask_expanded] = np.nan
+    Vy_stream[mask_expanded] = np.nan
+
+    # For contour: interpolate through airfoil (no white gap)
+    speed_filled = speed.copy()
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Speed color map
-    cm = ax.contourf(X, Y, speed / wind_speed, levels=30, cmap="coolwarm", alpha=0.7)
+    # Speed color map (use unmasked speed so no white region)
+    cm = ax.contourf(X, Y, speed_filled / wind_speed, levels=30, cmap="coolwarm", alpha=0.85)
     fig.colorbar(cm, ax=ax, label="V / V_inf", shrink=0.8)
 
     # Streamlines
-    ax.streamplot(X, Y, Vx, Vy, color="black", linewidth=0.5, density=2.0, arrowsize=0.8)
+    ax.streamplot(X, Y, Vx_stream, Vy_stream, color="black", linewidth=0.5,
+                  density=2.0, arrowsize=0.8)
 
-    # Airfoil
-    ax.fill(airfoil_x, airfoil_y, color="gray", alpha=0.9, edgecolor="black", linewidth=2)
+    # Airfoil on top
+    ax.fill(airfoil_x, airfoil_y, color="#2c3e50", alpha=1.0, edgecolor="black", linewidth=2, zorder=10)
 
     ax.set_xlim(-0.3, 1.5)
     ax.set_ylim(-0.5, 0.5)
